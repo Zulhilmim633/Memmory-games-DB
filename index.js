@@ -1,4 +1,5 @@
 const express = require("express")
+const cors = require("cors");
 const mysql = require("mysql2")
 const bodyParser = require("body-parser")
 const bcrypt = require("bcrypt")
@@ -11,7 +12,8 @@ let not_configure = false
 if (process.env.server_secret_token == null) {
     console.log('Please set the server_secret_token in your .env file')
     not_configure = true
-} else if (process.env.db_pass == null) {
+}
+if (process.env.db_pass == null) {
     console.log('Please set the db_pass in your .env file')
     not_configure = true
 }
@@ -32,6 +34,7 @@ const pool = mysql.createPool({
 app.disable("x-powered-by");
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+app.use(cors({ origin: ["https://localhost"] }));
 
 app.post("/api/account/register", (req, res) => {
     var check_email = req.query.check != undefined ? req.query.check : null
