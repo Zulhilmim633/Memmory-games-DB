@@ -34,9 +34,13 @@ const pool = mysql.createPool({
 app.disable("x-powered-by");
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
-app.use(cors({ origin: ["https://localhost"] }));
+app.use(cors({ origin: [
+    "https://localhost", // Production build
+    "http://127.0.0.1:5500" // Development build
+] }));
 
 app.post("/api/account/register", (req, res) => {
+    console.log(req.body)
     var check_email = req.query.check != undefined ? req.query.check : null
     pool.getConnection((err, connection) => {
         if (err) {
@@ -91,6 +95,7 @@ app.post("/api/account/register", (req, res) => {
 })
 
 app.post("/api/account/login", (req, res) => {
+    console.log(req.body)
     pool.getConnection((err, connection) => {
         if (err) {
             console.error('Error connecting to MySQL:', err);
@@ -105,13 +110,33 @@ app.post("/api/account/login", (req, res) => {
                 return;
             }
 
-            if (results.length == 0) return res.status(403).json({ status: "DB reset", msg: "Token valid but no data in database" })
+            if (results.length == 0) return res.status(403).json({ status: "not valid", msg: "There is no account with this email !! Would you prefer to signup instead" })
 
             bcrypt.compare(req.body.password, `${results[0].password_hash}`).then(result => {
                 if (!result) return res.status(401).json({ status: "not valid", msg: "Email and password not match" })
                 const accesstoken = jwt.sign({ email: req.body.email, password: results[0] }, process.env.server_secret_token)
                 res.json({ status: "OK", token: accesstoken })
             })
+        })
+    })
+})
+
+app.get("/api/account/detail",authentication,(req,res)=>{
+    pool.getConnection((err,connection)=>{
+        if (err) {
+            console.error('Error connecting to MySQL:', err);
+            res.status(500).json({ error: 'Error connecting to the database' });
+            return;
+        }
+
+        connection.query("SELECT username,email FROM users WHERE email = ?", req.user.email, (error, results, fields) => {
+            if(error){
+                console.error('Error executing query:', error);
+                res.status(500).json({ error: 'Error executing query' });
+                return;
+            }
+
+            res.json({status:"OK",data:results[0]})
         })
     })
 })
@@ -213,6 +238,10 @@ app.get("/api/leaderboard", (req, res) => {
             res.json(results);
         })
     })
+})
+
+app.use("*",(req,res)=>{
+    res.sendStatus(403)
 })
 
 function authentication(req, res, next) {
