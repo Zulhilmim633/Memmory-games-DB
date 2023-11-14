@@ -27,17 +27,19 @@ const pool = mysql.createPool({
     password: process.env.db_pass,
     database: "memmory_apps",
     waitForConnections: true,
-    connectionLimit: 10,
+    connectionLimit: 15,
     queueLimit: 0
 })
 
 app.disable("x-powered-by");
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
-app.use(cors({ origin: [
-    "https://localhost", // Production build
-    "http://127.0.0.1:5500" // Development build
-] }));
+app.use(cors({
+    origin: [
+        "https://localhost", // Production build
+        "http://127.0.0.1:5500" // Development build
+    ]
+}));
 
 app.post("/api/account/register", (req, res) => {
     console.log(req.body)
@@ -69,7 +71,7 @@ app.post("/api/account/register", (req, res) => {
 
             bcrypt.hash(req.body.password, 10)
                 .then(hash => {
-                    connection.query("INSERT INTO users(username,email,password_hash) VALUES (?,?,?)", [req.body.username, req.body.email, hash], (errs, result) => {
+                    connection.query("INSERT INTO users(username,email,password_hash,scores,prefrences) VALUES (?,?,?,?,?)", [req.body.username, req.body.email, hash, JSON.stringify({ type_easy: 0, type_med: 0, type_hard: 0, trace: 0 }), JSON.stringify({})], (errs, result) => {
                         connection.release()
                         if (errs) {
                             console.error('Error executing query:', error);
@@ -77,15 +79,7 @@ app.post("/api/account/register", (req, res) => {
                             return;
                         }
                         else {
-                            const accestoken = jwt.sign({ email: req.body.email, password: hash }, process.env.server_secret_token)
-                            connection.query("INSERT INTO scoreboard(username,scores) VALUES (?,?)",[req.body.username,JSON.stringify({})],(err,resu)=>{
-                                connection.release()
-                                if (err) {
-                                    console.error('Error executing query:', error);
-                                    res.status(500).json({ error: 'Error executing query' });
-                                    return;
-                                }
-                            })
+                            const accestoken = jwt.sign({ username: req.body.username, email: req.body.email, password: hash }, process.env.server_secret_token)
                             return res.status(201).json({ status: "OK", msg: "User create", token: accestoken })
                         }
                     })
@@ -102,7 +96,7 @@ app.post("/api/account/login", (req, res) => {
             res.status(500).json({ error: 'Error connecting to the database' });
             return;
         }
-        connection.query(`SELECT password_hash FROM users WHERE email = ?`, [req.body.email], (error, results, fields) => {
+        connection.query(`SELECT username,password_hash,scores,prefrences FROM users WHERE email = ?`, [req.body.email], (error, results, fields) => {
             connection.release()
             if (error) {
                 console.error('Error executing query:', error);
@@ -110,38 +104,42 @@ app.post("/api/account/login", (req, res) => {
                 return;
             }
 
-            if (results.length == 0) return res.status(403).json({ status: "not valid", msg: "There is no account with this email !! Would you prefer to signup instead" })
+            if (results.length == 0) return res.status(403).json({ status: "exist", msg: "There is no account with this email. Would you prefer to signup instead" })
 
             bcrypt.compare(req.body.password, `${results[0].password_hash}`).then(result => {
                 if (!result) return res.status(401).json({ status: "not valid", msg: "Email and password not match" })
-                const accesstoken = jwt.sign({ email: req.body.email, password: results[0] }, process.env.server_secret_token)
-                res.json({ status: "OK", token: accesstoken })
+                const accesstoken = jwt.sign({ username: results[0].username, email: req.body.email, password: results[0].password_hash }, process.env.server_secret_token)
+                res.json({ status: "OK", token: accesstoken, scores: results[0].scores, config: results[0].prefrences })
             })
         })
     })
 })
 
-app.get("/api/account/detail",authentication,(req,res)=>{
-    pool.getConnection((err,connection)=>{
+app.get("/api/account/detail", authentication, (req, res) => {
+    pool.getConnection((err, connection) => {
         if (err) {
             console.error('Error connecting to MySQL:', err);
             res.status(500).json({ error: 'Error connecting to the database' });
             return;
         }
 
-        connection.query("SELECT username,email FROM users WHERE email = ?", req.user.email, (error, results, fields) => {
-            if(error){
+        console.log(req.user.email)
+
+        connection.query("SELECT username,email,scores FROM users WHERE email = ?", req.user.email, (error, results, fields) => {
+            connection.release()
+            if (error) {
                 console.error('Error executing query:', error);
                 res.status(500).json({ error: 'Error executing query' });
                 return;
             }
 
-            res.json({status:"OK",data:results[0]})
+            res.json({ status: "OK", data: results[0] })
         })
     })
 })
 
-app.post("/api/account/update/username", authentication, (req, res) => {
+app.post("/api/account/update/username", authentication, (req, res, next) => {
+    console.log(req.body)
     pool.getConnection((err, connection) => {
         if (err) {
             console.error('Error connecting to MySQL:', err);
@@ -150,6 +148,7 @@ app.post("/api/account/update/username", authentication, (req, res) => {
         }
 
         connection.query(`SELECT * FROM users WHERE username = ?`, [req.body.username], (error, results, fields) => {
+            connection.release()
             if (error) {
                 console.error('Error executing query:', error);
                 res.status(500).json({ error: 'Error executing query' });
@@ -158,8 +157,11 @@ app.post("/api/account/update/username", authentication, (req, res) => {
 
 
             if (results.length > 0) return res.json({ status: "exist", msg: `Someone already used ${req.body.username}` })
+            console.log("not exist yet")
 
-            connection.query(`UPDATE users SET username = ? WHERE email = ?`, [req.body.username, req.user.email], (errors, result, fields) => {
+            console.log([req.body.username, req.user.email])
+
+            connection.query(`UPDATE users SET username = ? WHERE email = ?`, [req.body.username, req.user.email], (errors, result) => {
                 connection.release()
                 if (errors) {
                     console.error('Error executing query:', error);
@@ -173,6 +175,7 @@ app.post("/api/account/update/username", authentication, (req, res) => {
 })
 
 app.post("/api/account/password/update", authentication, (req, res) => {
+    console.log(req.body)
     pool.getConnection((err, connection) => {
         if (err) {
             console.error('Error connecting to MySQL:', err);
@@ -188,12 +191,54 @@ app.post("/api/account/password/update", authentication, (req, res) => {
                     res.status(500).json({ error: 'Error executing query' });
                     return;
                 }
-                const newtoken = jwt.sign({ email: req.user.email, password: hashes }, process.env.server_secret_token)
+                const newtoken = jwt.sign({ username: req.user.username, email: req.user.email, password: hashes }, process.env.server_secret_token)
                 res.json({ status: "OK", msg: "Success update password", newtoken: newtoken })
             })
         })
     })
 })
+
+app.post("/api/account/config", authentication, (req, res) => {
+    console.log(req.body)
+    pool.getConnection((err, connection) => {
+        if (err) {
+            console.error('Error connecting to MySQL:', err);
+            res.status(500).json({ error: 'Error connecting to the database' });
+            return;
+        }
+        connection.query("UPDATE users SET prefrences = ? WHERE email = ?", [JSON.stringify(req.body.config), req.user.email], (error, results) => {
+            connection.release()
+            if (error) {
+                console.error('Error executing query:', error);
+                res.status(500).json({ error: 'Error executing query' });
+                return;
+            }
+            res.json({ status: "OK", msg: "Preferences succesfully updated" })
+        })
+    })
+})
+
+app.get("/api/account/config", authentication, (req, res) => {
+    console.log(req.body)
+    pool.getConnection((err, connection) => {
+        if (err) {
+            console.error('Error connecting to MySQL:', err);
+            res.status(500).json({ error: 'Error connecting to the database' });
+            return;
+        }
+        connection.query("SELECT prefrences FROM users WHERE email = ?", [req.user.email], (error, results) => {
+            connection.release()
+            if (error) {
+                console.error('Error executing query:', error);
+                res.status(500).json({ error: 'Error executing query' });
+                return;
+            }
+            console.log(results)
+            res.json({ status: "OK", msg: "Foud your preferences", config: results[0].prefrences })
+        })
+    })
+})
+
 
 app.post("/api/leaderboard/update", authentication, (req, res) => {
     pool.getConnection((err, connection) => {
@@ -203,7 +248,7 @@ app.post("/api/leaderboard/update", authentication, (req, res) => {
             return;
         }
 
-        connection.query(`UPDATE scoreboard SET scores = ? WHERE username = ?`, [JSON.stringify(req.body.data), req.body.username], (errs, results) => {
+        connection.query(`UPDATE users SET scores = ? WHERE username = ?`, [JSON.stringify(req.body.data), req.user.username], (errs, results) => {
             connection.release()
             if (errs) {
                 console.error('Error executing query:', errs);
@@ -216,6 +261,16 @@ app.post("/api/leaderboard/update", authentication, (req, res) => {
 })
 
 app.get("/api/leaderboard", (req, res) => {
+    let have_query = false;
+    const game = {
+        type_e: "type_easy",
+        type_m: "type_med",
+        type_h: "type_hard",
+        trace: "trace"
+    }
+    if (req.query.game) {
+        if (game[req.query.game] != undefined) have_query = true
+    }
     pool.getConnection((err, connection) => {
         if (err) {
             console.error('Error connecting to MySQL:', err);
@@ -223,24 +278,66 @@ app.get("/api/leaderboard", (req, res) => {
             return;
         }
 
-        // Perform a query
-        connection.query('SELECT * FROM scoreboard', (error, results, fields) => {
-            // Release the connection
-            connection.release();
+        if (have_query) {
+            console.log(req.query)
+            const cast = `scores->'$.${game[req.query.game]}'`
+            console.log(`SELECT username,scores FROM users ORDER BY ${cast} ${req.query.game == "trace" ? "ASC" : "DESC"} LIMIT 50`)
+            connection.query(`SELECT username,scores FROM users ORDER BY ${cast} ${req.query.game == "trace" ? "ASC" : "DESC"} LIMIT 50`, (error, results) => {
+                connection.release()
 
+                if (error) {
+                    console.error('Error executing query:', error);
+                    res.status(500).json({ error: 'Error executing query' });
+                    return;
+                }
+                console.log(results)
+
+                res.json({ status: "OK", board: results })
+            })
+        } else {
+            connection.query('SELECT username,scores FROM users', (error, results, fields) => {
+                // Release the connection
+                connection.release();
+
+                if (error) {
+                    console.error('Error executing query:', error);
+                    res.status(500).json({ error: 'Error executing query' });
+                    return;
+                }
+
+                // Send the query results as a JSON response
+                res.json(results);
+            })
+        }
+    })
+})
+
+app.get("/api/ping", authentication, (req, res) => {
+    pool.getConnection((err, connection) => {
+        if (err) {
+            console.error('Error connecting to MySQL:', err);
+            res.status(500).json({ error: 'Error connecting to the database' });
+            return;
+        }
+
+        connection.query("SELECT scores,prefrences FROM users where email = ?", req.user.email, (error, results) => {
+            connection.release()
             if (error) {
                 console.error('Error executing query:', error);
                 res.status(500).json({ error: 'Error executing query' });
                 return;
             }
 
-            // Send the query results as a JSON response
-            res.json(results);
+            if (results.length > 0) {
+                res.json({ status: "OK", config: results[0].prefrences, scores: results[0].scores })
+            } else {
+                res.json({ status: "Not Found", msg: "This account might be deleted" })
+            }
         })
     })
 })
 
-app.use("*",(req,res)=>{
+app.use("*", (req, res) => {
     res.sendStatus(403)
 })
 
